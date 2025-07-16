@@ -31,7 +31,7 @@ contract TruthMarket is Initializable, OwnableUpgradeable, OraclePausable, Reent
         uint256 outcome;
     }
 
-    string public constant VERSION = "1.1.0";
+    string public constant VERSION = "1.2.0";
 
     uint256 private constant _HUNDRED = 100;
     uint256 private constant _ONE_PERCENT = 1e16;
@@ -100,6 +100,7 @@ contract TruthMarket is Initializable, OwnableUpgradeable, OraclePausable, Reent
     event FirstChallengePeriodChanged(uint256 firstChallengePeriod);
     event SecondChallengePeriodChanged(uint256 secondChallengePeriod);
     event RewardReceiverBlacklisted(address indexed token, address indexed account);
+    event RewardTransferred(address indexed token, address indexed receiverAccount, uint256 amount);
 
     error TokenCapExceeded();
     error MarketNotInTradingPhase();
@@ -540,8 +541,10 @@ contract TruthMarket is Initializable, OwnableUpgradeable, OraclePausable, Reent
         if (isBlacklisted) {
             rewardToken.safeTransfer(marketManager.safeBoxAddress(), rewardAmount);
             emit RewardReceiverBlacklisted(address(rewardToken), _receiver);
+            emit RewardTransferred(address(rewardToken), marketManager.safeBoxAddress(), rewardAmount);
         } else {
             rewardToken.safeTransfer(_receiver, rewardAmount);
+            emit RewardTransferred(address(rewardToken), _receiver, rewardAmount);
         }
     }
 

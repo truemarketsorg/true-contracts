@@ -187,7 +187,45 @@ contract TruthMarketManager is
         uint256 _rewardAmount,
         string memory _yesTokenSymbol,
         string memory _noTokenSymbol
-    ) external nonReentrant whenNotPaused onlyOracleCouncilAndOwner {
+    ) external {
+        // Call the new createMarketWithPaymentToken function with the system's default paymentToken
+        createMarketWithPaymentToken(
+            _marketQuestion,
+            _marketSource,
+            _additionalInfo,
+            _endOfTrading,
+            _yesNoTokenCap,
+            _rewardToken,
+            _rewardAmount,
+            _yesTokenSymbol,
+            _noTokenSymbol,
+            paymentToken
+        );
+    }
+
+    /// @notice Creates a new market with a specified payment token
+    /// @param _marketQuestion The question that the market will resolve
+    /// @param _marketSource The source that will be used to verify the outcome
+    /// @param _additionalInfo Additional information about the market
+    /// @param _endOfTrading The timestamp when trading will end
+    /// @param _yesNoTokenCap The maximum amount of YES/NO tokens that can be minted
+    /// @param _rewardToken The token used for rewards
+    /// @param _rewardAmount The amount of reward tokens
+    /// @param _yesTokenSymbol The symbol for the YES token (optional)
+    /// @param _noTokenSymbol The symbol for the NO token (optional)
+    /// @param _paymentToken The token to be used for payment in this market
+    function createMarketWithPaymentToken(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        address _paymentToken
+    ) public nonReentrant whenNotPaused onlyOracleCouncilAndOwner {
         if (_endOfTrading < block.timestamp + minimumTradingDuration) {
             revert InvalidEndOfTrading();
         }
@@ -197,7 +235,9 @@ contract TruthMarketManager is
         if (bytes(_marketSource).length == 0 ) {
             revert InvalidSource();
         }
-
+        if (_paymentToken == address(0)) {
+            revert InvalidAddress();
+        }
         if (rewardWallet == address(0)) {
             revert InvalidRewardWallet();
         }
@@ -225,7 +265,7 @@ contract TruthMarketManager is
             _additionalInfo,
             _endOfTrading,
             _yesNoTokenCap,
-            address(paymentToken),
+            _paymentToken, // Use the specified payment token instead of the system default
             address(yesToken),
             address(noToken),
             _rewardToken,
