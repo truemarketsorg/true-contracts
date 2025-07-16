@@ -137,7 +137,7 @@ contract OracleBonds is
         marketBond[_market].resolverBond = _amount;
         marketBond[_market].totalMarketBond = marketBond[_market].totalMarketBond + _amount;
         marketBond[_market].totalDepositedMarketBond = marketBond[_market].totalDepositedMarketBond + _amount;
-        _transferToMarketBond(_resolverAddress, _amount);
+        _transferToMarketBond(_market, _resolverAddress, _amount);
         emit ResolverBondSent(_market, _resolverAddress, _amount);
     }
 
@@ -161,7 +161,7 @@ contract OracleBonds is
         marketBond[_market].disputorsTotalBond = marketBond[_market].disputorsTotalBond + _amount;
         marketBond[_market].totalMarketBond = marketBond[_market].totalMarketBond + _amount;
         marketBond[_market].totalDepositedMarketBond = marketBond[_market].totalDepositedMarketBond + _amount;
-        _transferToMarketBond(_disputorAddress, _amount);
+        _transferToMarketBond(_market, _disputorAddress, _amount);
         emit DisputorBondSent(_market, _disputorAddress, _amount);
     }
 
@@ -179,7 +179,7 @@ contract OracleBonds is
         marketBond[_market].escalatedDisputorBond = _amount;
         marketBond[_market].totalMarketBond = marketBond[_market].totalMarketBond + _amount;
         marketBond[_market].totalDepositedMarketBond = marketBond[_market].totalDepositedMarketBond + _amount;
-        _transferToMarketBond(_escalatedDisputorAddress, _amount);
+        _transferToMarketBond(_market, _escalatedDisputorAddress, _amount);
         emit EscalatedDisputorBondSent(_market, _escalatedDisputorAddress, _amount);
     }
 
@@ -197,7 +197,7 @@ contract OracleBonds is
         marketBond[_market].totalMarketBond = marketBond[_market].totalMarketBond - escalatedDisputorBond;
         marketBond[_market].escalatedDisputorBond = 0;
 
-        _transferBondFromMarket(escalatedDisputorAddress, escalatedDisputorBond);
+        _transferBondFromMarket(_market, escalatedDisputorAddress, escalatedDisputorBond);
         emit BondTransferredFromMarketBondToUser(_market, escalatedDisputorAddress, escalatedDisputorBond);
     }
 
@@ -233,7 +233,7 @@ contract OracleBonds is
         }
 
         marketBond[_market].totalMarketBond = marketBond[_market].totalMarketBond - amountToTransfer;
-        _transferBondFromMarket(marketManager.safeBoxAddress(), amountToTransfer);
+        _transferBondFromMarket(_market, marketManager.safeBoxAddress(), amountToTransfer);
         emit BondTransferredFromMarketBondToSafeBox(_market, amountToTransfer, _bondToReduce, _disputorAddress);
     }
 
@@ -247,7 +247,7 @@ contract OracleBonds is
             if (marketBond[_market].resolverBond > 0) {
                 totalIssuedBack = marketBond[_market].resolverBond;
                 marketBond[_market].resolverBond = 0;
-                _transferBondFromMarket(marketManager.resolverAddress(_market), totalIssuedBack);
+                _transferBondFromMarket(_market, marketManager.resolverAddress(_market), totalIssuedBack);
                 emit BondTransferredFromMarketBondToUser(
                     _market, marketManager.resolverAddress(_market), totalIssuedBack
                 );
@@ -276,7 +276,7 @@ contract OracleBonds is
             marketBond[_market].disputorsCount = marketBond[_market].disputorsCount - 1;
         }
 
-        _transferBondFromMarket(_disputorAddress, disputorBond);
+        _transferBondFromMarket(_market, _disputorAddress, disputorBond);
         emit BondTransferredFromMarketBondToUser(_market, _disputorAddress, disputorBond);
     }
 
@@ -301,7 +301,7 @@ contract OracleBonds is
             marketBond[_market].disputorsCount = marketBond[_market].disputorsCount - 1;
         }
 
-        _transferBondFromMarket(_disputorAddress, disputorBond);
+        _transferBondFromMarket(_market, _disputorAddress, disputorBond);
         emit OpenDisputeBondTransferredFromMarketToDisputor(_market, _disputorAddress, disputorBond);
     }
 
@@ -371,19 +371,21 @@ contract OracleBonds is
     // Internal functions //////////////////////////////////////////////
 
     /// @notice Transfers tokens to market bond
+    /// @param _market Address of the market
     /// @param _account Address to transfer from
     /// @param _amount Amount to transfer
-    function _transferToMarketBond(address _account, uint256 _amount) internal whenNotPaused {
+    function _transferToMarketBond(address _market, address _account, uint256 _amount) internal whenNotPaused {
         if (_account == address(0)) revert InvalidAddress();
-        IERC20Upgradeable(marketManager.paymentToken()).safeTransferFrom(_account, address(this), _amount);
+        IERC20Upgradeable(ITruthMarket(_market).paymentToken()).safeTransferFrom(_account, address(this), _amount);
     }
 
     /// @notice Transfers bonds from market
+    /// @param _market Address of the market
     /// @param _account Address to transfer to
     /// @param _amount Amount to transfer
-    function _transferBondFromMarket(address _account, uint256 _amount) internal whenNotPaused {
+    function _transferBondFromMarket(address _market, address _account, uint256 _amount) internal whenNotPaused {
         if (_account == address(0)) revert InvalidAddress();
-        IERC20Upgradeable token = IERC20Upgradeable(marketManager.paymentToken());
+        IERC20Upgradeable token = IERC20Upgradeable(ITruthMarket(_market).paymentToken());
 
         bool isBlacklisted = false;
         try IBlacklistable(address(token)).isBlacklisted(_account) returns (bool result) {
@@ -395,7 +397,7 @@ contract OracleBonds is
 
         if (isBlacklisted) {
             token.safeTransfer(marketManager.safeBoxAddress(), _amount);
-            emit BondTransferredFromMarketBondToSafeBox(msg.sender, _amount, 0, _account);
+            emit BondTransferredFromMarketBondToSafeBox(_market, _amount, 0, _account);
         } else {
             token.safeTransfer(_account, _amount);
         }
