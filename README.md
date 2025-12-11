@@ -45,8 +45,13 @@ For contract addresses, versions, and configuration parameters, see [network_con
 - **[GuardianAudits](https://github.com/GuardianAudits/Audits/blob/main/Truemarkets/2025-03-18_Truemarkets_Report.pdf)**
 - **[iosiro](https://iosiro.com/audits/truth-markets-v2-smart-contract-audit)**
 
+## Links
+
+- **Website**: [truemarkets.org](https://truemarkets.org)
+- **Documentation**: [docs.truemarkets.org](https://docs.truemarkets.org/)
+- **X (Twitter)**: [@truemarkets](https://x.com/truemarkets)
+- **Discord**: [Join our community](https://discord.gg/truemarkets)
+
 ---
 
 *This repository contains the smart contracts for the Truemarkets prediction market platform and its underlying intersubjective optimistic oracle system. The platform enables decentralized prediction markets with sophisticated dispute resolution for accurate outcome determination.*
-
-**Learn More**: Visit [docs.truemarkets.org](https://docs.truemarkets.org/) for additional platform information and user guides.
