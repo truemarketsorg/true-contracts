@@ -1,0 +1,59 @@
+{
+  "base_mainnet_prod": {
+    "contracts": {
+      "truthMarketMastercopy": "0xB7b53c6B219A29aFD8F2EbBeD1ea2B8867eef3d1",
+      "truthMarketManager": "0x61A98Bef11867c69489B91f340fE545eEfc695d7",
+      "oracleCouncil": "0xCa7Af04BC6D24EEA67618c11B883be6851F198BE",
+      "oracleBonds": "0x8175b0A1e803aC4205aE35F614315Ba801275baA",
+      "escalation": "0x7397eF691aeb47Fe7Ef2f7e908162e8d7a940B27",
+      "truthAttesterSBT": "0xbBB4000C90cb842Ebad452078CBcD7c55157371B",
+      "truthSeekerPatronNFT": "0xcD3F8969627DFE08D75f9Fe2eA6ed26080706C88",
+      "timelock": "0x8963712Bc91aE8C64d96293ed9A1157344f6Fd04",
+      "stakingRewardsTRUE": "0x1a40621C54330940B081F925aA027458a4c035eD",
+      "stakingRewardsTRUEETHPair": "0x688F5B490Edb7F466A89a6Db4fb30829558aF014",
+      "truthMarketAdapter": "0x6E08d24AEf78F6d1a97503F64E84fDF65f8125E1",
+      "universalRouterAdapter": "0x0A1AFc2121B4441127a02DEF72928F61f564034a",
+      "universalRouterAdapterV3SwapStrategy": "0x33961932a59D43D80b260EB866056fbe0aFb3B65",
+      "universalRouterAdapterSweepStrategy": "0xEB3151902C63aF869977F0Ba6BAaec476FFAb215",
+      "universalRouterAdapterV4SwapStrategy": "0x3F3dA9e841FbcB5ABB2A097cBB922E3EF7F7927e",
+      "truthMarketV2Mastercopy": "0x2CA897F98F6a45729968f0057F1fBf88DB3e3409",
+      "uniswapV4HookAddress": "0x1cFeAD8E66cebC5E51093Dfd247Ad34f841740c4",
+      "orderManager": "0x8E5E63f69Bf7ef2A24f5247C2Bfc3946B95e3Da7",
+      "feeCollector": "0x39339E149c2D916aa899Bf73D2Debb15F4755d9D",
+      "tokenConverter": "0x8078254008819Bcfd9301Fd68886433c2f81B792",
+      "truthMarketSwapValidator": "0x55e26CF92B924C069db4d8Da7B0b36154374Dd38"
+    },
+    "external": {
+      "uniswapV3Factory": "0x33128a8fC17869897dcE68Ed026d694621f6FDfD",
+      "uniswapV3SwapRouter02": "0x2626664c2603336E57B271c5C0b26F421741e481",
+      "uniswapV3Staker": "0x42bE4D6527829FeFA1493e1fb9F3676d2425C3C1",
+      "uniswapV3NonfungiblePositionManager": "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1",
+      "uniswapV3UniversalRouter": "0x6ff5693b99212da76ad316178a184ab56d299b43",
+      "uniswapV3Permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "yearnV3Vault": "0xb13CF163d916917d9cD6E836905cA5f12a1dEF4B",
+      "uniswapV4PoolManager": "0x498581fF718922c3f8e6A244956aF099B2652b2b",
+      "uniswapV4PositionManager": "0x7C5f5A4bBd8fD63184577525326123B519429bDc",
+      "create2Deployer": "0x4e59b44847b379578588920cA78FbF26c0B4956C"
+    },
+    "tokens": {
+      "trueToken": "0x21CFCFc3d8F98fC728f48341D10Ad8283F6EB7AB",
+      "paymentToken": "0xb13CF163d916917d9cD6E836905cA5f12a1dEF4B",
+      "truthMarketAdapterAssetToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    },
+    "wallets": {
+      "safeBox": "0x3F168219dadf4460dC6Ad93eaa3641340C1330D6",
+      "rewardWallet": "0x3F168219dadf4460dC6Ad93eaa3641340C1330D6"
+    },
+    "deployment": {
+      "versions": {
+        "truthMarketManager": "1.2.0",
+        "oracleCouncil": "1.2.0",
+        "oracleBonds": "1.1.1",
+        "escalation": "1.0.0",
+        "truthMarketAdapter": "1.0.0",
+        "universalRouterAdapter": "1.0.0",
+        "tokenConverter": "1.0.0"
+      }
+    }
+  }
+}
