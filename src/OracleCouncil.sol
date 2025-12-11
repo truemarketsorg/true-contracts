@@ -396,6 +396,46 @@ contract OracleCouncil is
         );
     }
 
+    /// @notice Creates a new V4 market with dynamic fee and tick spacing
+    /// @param _marketQuestion The question that the market will resolve
+    /// @param _marketSource The source that will be used to verify the outcome
+    /// @param _additionalInfo Additional information about the market
+    /// @param _endOfTrading The timestamp when trading will end
+    /// @param _yesNoTokenCap The maximum amount of YES/NO tokens that can be minted
+    /// @param _rewardToken The token used for rewards
+    /// @param _rewardAmount The amount of reward tokens
+    /// @param _yesTokenSymbol The symbol for the YES token
+    /// @param _noTokenSymbol The symbol for the NO token
+    /// @param _fee The fee rate for V4 pools
+    /// @param _tickSpacing The tick spacing for V4 pools
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing
+    ) public nonReentrant whenNotPaused onlyCouncilMembers returns (address) {
+        return marketManager.createMarketV2(
+            _marketQuestion,
+            _marketSource,
+            _additionalInfo,
+            _endOfTrading,
+            _yesNoTokenCap,
+            _rewardToken,
+            _rewardAmount,
+            _yesTokenSymbol,
+            _noTokenSymbol,
+            _fee,
+            _tickSpacing
+        );
+    }
+
     /// @notice Sets the maximum amount of YES/NO tokens that can be minted for a market
     /// @param _market The address of the market to update
     /// @param _yesNoTokenCap The new maximum token cap
