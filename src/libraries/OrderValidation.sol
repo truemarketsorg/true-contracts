@@ -9,7 +9,7 @@ library OrderValidation {
 
     error InvalidTickThreshold(int24 currentTick, int24 tickThreshold, bool zeroForOne);
 
-    error InsufficientOrderAmount(uint128 amountIn, uint8 decimals, uint256 minimumLiteralAmount);
+    error InsufficientOrderAmount(uint128 amountIn, uint256 minimumOrderAmount);
 
     function validateTickRange(int24 tickLower, int24 tickUpper, int24 tickSpacing, bool enablePartialFill)
         internal
@@ -32,30 +32,23 @@ library OrderValidation {
         }
     }
 
-    function validateTickThreshold(int24 tick, int24 tickLower, int24 tickUpper, int24 tickThreshold, bool zeroForOne)
-        internal
-        pure
-    {
+    function validateTickThreshold(int24 tick, int24 tickLower, int24 tickUpper, bool zeroForOne) internal pure {
         if (zeroForOne && tick >= tickLower) {
-            revert InvalidTickThreshold(tick, tickThreshold, zeroForOne);
+            revert InvalidTickThreshold(tick, tickLower, zeroForOne);
         }
 
         if (!zeroForOne && tick <= tickUpper) {
-            revert InvalidTickThreshold(tick, tickThreshold, zeroForOne);
+            revert InvalidTickThreshold(tick, tickUpper, zeroForOne);
         }
     }
 
-    function validateMinimumAmount(address token, uint128 amount, uint256 minimumLiteralAmount) internal view {
-        if (minimumLiteralAmount == 0) {
+    function validateMinimumAmount(uint128 amount, uint256 minimumOrderAmount) internal view {
+        if (minimumOrderAmount == 0) {
             return;
         }
 
-        uint8 decimals = IERC20Metadata(token).decimals();
-
-        uint256 literalAmount = amount / (10 ** decimals);
-
-        if (literalAmount < minimumLiteralAmount) {
-            revert InsufficientOrderAmount(amount, decimals, minimumLiteralAmount);
+        if (amount < minimumOrderAmount) {
+            revert InsufficientOrderAmount(amount, minimumOrderAmount);
         }
     }
 }
