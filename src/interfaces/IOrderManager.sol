@@ -4,6 +4,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
+import {Order} from "../libraries/Order.sol";
 
 interface IOrderManager {
     error Unauthorized();
@@ -44,7 +45,7 @@ interface IOrderManager {
         uint256 liquidity
     );
 
-    event MinimumLiteralAmountUpdated(address indexed token, uint256 minimumLiteralAmount);
+    event MinimumOrderAmountUpdated(address indexed token, uint256 minimumOrderAmount);
 
     event MaximumExecutionCountUpdated(uint256 maximumExecutionCount);
 
@@ -71,15 +72,6 @@ interface IOrderManager {
 
     event AdminSafeUpdated(address indexed adminSafe);
 
-    struct PendingOrder {
-        address owner;
-        bool zeroForOne;
-        int24 tickLower;
-        int24 tickUpper;
-        uint256 liquidity;
-        bool enablePartialFill;
-    }
-
     struct CreateOrderParams {
         PoolKey poolKey;
         uint128 amountIn;
@@ -96,10 +88,10 @@ interface IOrderManager {
         uint128 amount1Min;
     }
 
-    /// @notice Sets the minimum literal amount required for a specific token
+    /// @notice Sets the minimum order amount required for a specific token
     /// @param token The token address to set the minimum for
-    /// @param minimumLiteralAmount_ The new minimum literal amount for this token
-    function setMinimumLiteralAmount(address token, uint256 minimumLiteralAmount_) external;
+    /// @param minimumOrderAmount_ The new minimum order amount for this token
+    function setMinimumOrderAmount(address token, uint256 minimumOrderAmount_) external;
 
     /// @notice Sets the maximum number of orders that can be executed in a single transaction
     /// @param maximumExecutionCount_ The new maximum execution count
@@ -143,7 +135,7 @@ interface IOrderManager {
     /// @param poolId The ID of the pool containing the order
     /// @param orderId The ID of the order to query
     /// @return The pending order details
-    function pendingOrder(PoolId poolId, uint32 orderId) external view returns (PendingOrder memory);
+    function pendingOrder(PoolId poolId, uint32 orderId) external view returns (Order memory);
 
     /// @notice Rescues tokens from the contract
     /// @param token The token to rescue

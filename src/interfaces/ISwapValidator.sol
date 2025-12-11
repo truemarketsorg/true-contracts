@@ -1,6 +1,7 @@
 pragma solidity ^0.8.24;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
@@ -19,4 +20,10 @@ interface ISwapValidator {
         BalanceDelta delta,
         bytes calldata hookData
     ) external;
+
+    /// @notice Sets tick boundaries for a pool
+    /// @param poolId The pool ID
+    /// @param tickLowerBoundary The lower tick boundary
+    /// @param tickUpperBoundary The upper tick boundary
+    function setBoundaries(PoolId poolId, int24 tickLowerBoundary, int24 tickUpperBoundary) external;
 }
