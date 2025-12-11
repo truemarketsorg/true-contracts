@@ -50,7 +50,6 @@ contract OracleBonds is
     event BondTransferredFromMarketBondToUser(address market, address account, uint256 amount);
     event NewOracleCouncilAddress(address oracleCouncil);
     event NewManagerAddress(address managerAddress);
-    event NewStakingThalesAddress(address stakingThales);
     event EscalatedDisputorBondSent(address market, address escalatedDisputor, uint256 amount);
     event BondTransferredFromMarketBondToSafeBox(
         address market, uint256 amount, uint256 bondReduced, address reduceAddress

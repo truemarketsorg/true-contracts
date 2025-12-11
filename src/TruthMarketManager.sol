@@ -15,6 +15,7 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
 import "@openzeppelin/contracts/proxy/Clones.sol";
 
 import "./TruthMarket.sol";
+import "./TruthMarketV2.sol";
 import "./MarketEnums.sol";
 import "./interfaces/IOracleBonds.sol";
 import "./interfaces/IOracleCouncil.sol";
@@ -34,6 +35,24 @@ contract TruthMarketManager is
 {
     using SafeERC20Upgradeable for IERC20Upgradeable;
     using AddressSetLib for AddressSetLib.AddressSet;
+
+    // Structs ////////////////////////////////////////////////////
+    
+    struct MarketCreationParams {
+        string marketQuestion;
+        string marketSource;
+        string additionalInfo;
+        uint256 endOfTrading;
+        uint256 yesNoTokenCap;
+        address rewardToken;
+        uint256 rewardAmount;
+        string yesTokenSymbol;
+        string noTokenSymbol;
+        address paymentTokenAddress;
+        uint24 fee; // V4 specific, V3 set to 0
+        int24 tickSpacing; // V4 specific, V3 set to 0
+        address hookAddress; // V4 specific, V3 set to address(0)
+    }
 
     // State ////////////////////////////////////////////////////////
 
@@ -67,6 +86,10 @@ contract TruthMarketManager is
     mapping(address => address) public creatorAddress;
     mapping(address => address) public resolverAddress;
 
+    // V4-related storage variables
+    address public uniswapV4HookAddress;    // V4 Hook contract address
+    address public truthMarketV2Mastercopy; // TruthMarketV2 implementation contract
+
     // Events ////////////////////////////////////////////////////////
 
     event AddressesUpdated(
@@ -76,7 +99,9 @@ contract TruthMarketManager is
         address safeBoxAddress,
         address uniswapV3Factory,
         address rewardWallet,
-        address escalationAddress
+        address escalationAddress,
+        address truthMarketV2Mastercopy,
+        address uniswapV4HookAddress
     );
 
     event PercentagesUpdated(uint256 safeBoxPercentage, uint256 creatorPercentage, uint256 resolverPercentage);
@@ -122,6 +147,8 @@ contract TruthMarketManager is
     error InvalidSymbolFormat(string symbol);
     error DuplicateSymbols(string symbol);
     error BondsNotSettled(address market);
+    error InvalidFee(uint24 fee);
+    error InvalidV2Mastercopy();
 
     // Modifiers ////////////////////////////////////////////////////////
 
@@ -226,71 +253,75 @@ contract TruthMarketManager is
         string memory _noTokenSymbol,
         address _paymentToken
     ) public nonReentrant whenNotPaused onlyOracleCouncilAndOwner {
-        if (_endOfTrading < block.timestamp + minimumTradingDuration) {
-            revert InvalidEndOfTrading();
+        MarketCreationParams memory params = MarketCreationParams({
+            marketQuestion: _marketQuestion,
+            marketSource: _marketSource,
+            additionalInfo: _additionalInfo,
+            endOfTrading: _endOfTrading,
+            yesNoTokenCap: _yesNoTokenCap,
+            rewardToken: _rewardToken,
+            rewardAmount: _rewardAmount,
+            yesTokenSymbol: _yesTokenSymbol,
+            noTokenSymbol: _noTokenSymbol,
+            paymentTokenAddress: _paymentToken,
+            fee: 0, // V3 doesn't use fee
+            tickSpacing: 0, // V3 doesn't use tickSpacing
+            hookAddress: address(0) // V3 doesn't use hook address
+        });
+        
+        _createMarketCommon(params, 1);
+    }
+
+    /// @notice Creates a new V4 market with dynamic fee and tick spacing
+    /// @param _marketQuestion The question that the market will resolve
+    /// @param _marketSource The source that will be used to verify the outcome
+    /// @param _additionalInfo Additional information about the market
+    /// @param _endOfTrading The timestamp when trading will end
+    /// @param _yesNoTokenCap The maximum amount of YES/NO tokens that can be minted
+    /// @param _rewardToken The token used for rewards
+    /// @param _rewardAmount The amount of reward tokens
+    /// @param _yesTokenSymbol The symbol for the YES token (optional)
+    /// @param _noTokenSymbol The symbol for the NO token (optional)
+    /// @param _fee The fee rate for V4 pools
+    /// @param _tickSpacing The tick spacing for V4 pools
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing
+    ) external nonReentrant whenNotPaused onlyOracleCouncilAndOwner returns (address) {
+        // V4-specific validations
+        if (_fee > 10000) {
+            revert InvalidFee(_fee);
         }
-        if (bytes(_marketQuestion).length == 0) {
-            revert InvalidQuestion();
+        if (truthMarketV2Mastercopy == address(0)) {
+            revert InvalidV2Mastercopy();
         }
-        if (bytes(_marketSource).length == 0 ) {
-            revert InvalidSource();
-        }
-        if (_paymentToken == address(0)) {
-            revert InvalidAddress();
-        }
-        if (rewardWallet == address(0)) {
-            revert InvalidRewardWallet();
-        }
-
-        TruthMarket truthMarket = TruthMarket(Clones.clone(truthMarketMastercopy));
-
-        // Set and validate symbols
-        string memory _finalYesSymbol = bytes(_yesTokenSymbol).length > 0 ? _yesTokenSymbol : "YES";
-        string memory _finalNoSymbol = bytes(_noTokenSymbol).length > 0 ? _noTokenSymbol : "NO";
-
-        if (!_isValidSymbol(_finalYesSymbol)) revert InvalidSymbolFormat(_finalYesSymbol);
-        if (!_isValidSymbol(_finalNoSymbol)) revert InvalidSymbolFormat(_finalNoSymbol);
-
-        // Check for duplicate symbols
-        if (keccak256(bytes(_finalYesSymbol)) == keccak256(bytes(_finalNoSymbol))) {
-            revert DuplicateSymbols(_finalYesSymbol);
-        }
-
-        YesNoToken yesToken = new YesNoToken(string.concat(_finalYesSymbol, " Token"), _finalYesSymbol);
-        YesNoToken noToken = new YesNoToken(string.concat(_finalNoSymbol, " Token"), _finalNoSymbol);
-
-        truthMarket.initialize(
-            _marketQuestion,
-            _marketSource,
-            _additionalInfo,
-            _endOfTrading,
-            _yesNoTokenCap,
-            _paymentToken, // Use the specified payment token instead of the system default
-            address(yesToken),
-            address(noToken),
-            _rewardToken,
-            _rewardAmount
-        );
-
-        if (_rewardAmount > 0) {
-            IERC20Upgradeable(_rewardToken).safeTransferFrom(rewardWallet, address(truthMarket), _rewardAmount);
-        }
-
-        yesToken.transferOwnership(address(truthMarket));
-        noToken.transferOwnership(address(truthMarket));
-
-        creatorAddress[address(truthMarket)] = msg.sender;
-        _activeMarkets.add(address(truthMarket));
-
-        emit MarketCreatedWithDescription(
-            address(truthMarket),
-            _marketQuestion,
-            _marketSource,
-            _additionalInfo,
-            _endOfTrading,
-            _yesNoTokenCap,
-            msg.sender
-        );
+        
+        MarketCreationParams memory params = MarketCreationParams({
+            marketQuestion: _marketQuestion,
+            marketSource: _marketSource,
+            additionalInfo: _additionalInfo,
+            endOfTrading: _endOfTrading,
+            yesNoTokenCap: _yesNoTokenCap,
+            rewardToken: _rewardToken,
+            rewardAmount: _rewardAmount,
+            yesTokenSymbol: _yesTokenSymbol,
+            noTokenSymbol: _noTokenSymbol,
+            paymentTokenAddress: paymentToken,
+            fee: _fee,
+            tickSpacing: _tickSpacing,
+            hookAddress: uniswapV4HookAddress
+        });
+        
+        return _createMarketCommon(params, 2);
     }
 
     /// @notice Resolves a market by Oracle Council decision
@@ -470,7 +501,9 @@ contract TruthMarketManager is
         address _safeBoxAddress,
         address _uniswapV3Factory,
         address _rewardWallet,
-        address _escalationAddress
+        address _escalationAddress,
+        address _truthMarketV2Mastercopy,
+        address _uniswapV4HookAddress
     ) external onlyOwner {
         if (_paymentToken != paymentToken) {
             paymentToken = _paymentToken;
@@ -496,14 +529,27 @@ contract TruthMarketManager is
             escalationAddress = _escalationAddress;
         }
 
+        // V4-related address updates
+        if (_truthMarketV2Mastercopy != address(0) && 
+            _truthMarketV2Mastercopy != truthMarketV2Mastercopy) {
+            truthMarketV2Mastercopy = _truthMarketV2Mastercopy;
+        }
+        
+        if (_uniswapV4HookAddress != address(0) && 
+            _uniswapV4HookAddress != uniswapV4HookAddress) {
+            uniswapV4HookAddress = _uniswapV4HookAddress;
+        }
+
         emit AddressesUpdated(
+            _paymentToken,
             _truthMarketMastercopy,
             _oracleCouncilAddress,
-            _paymentToken,
             _safeBoxAddress,
             _uniswapV3Factory,
             _rewardWallet,
-            _escalationAddress
+            _escalationAddress,
+            _truthMarketV2Mastercopy,
+            _uniswapV4HookAddress
         );
     }
 
@@ -710,6 +756,108 @@ contract TruthMarketManager is
     }
 
     // Internal functions //////////////////////////////////////////////
+
+    /// @notice Internal function to create markets with shared logic
+    /// @param params Market creation parameters
+    /// @param version Market version (1 for V3, 2 for V4)
+    function _createMarketCommon(MarketCreationParams memory params, uint8 version) internal returns (address) {
+        // Common validations
+        if (params.endOfTrading < block.timestamp + minimumTradingDuration) {
+            revert InvalidEndOfTrading();
+        }
+        if (bytes(params.marketQuestion).length == 0) {
+            revert InvalidQuestion();
+        }
+        if (bytes(params.marketSource).length == 0) {
+            revert InvalidSource();
+        }
+        if (params.paymentTokenAddress == address(0)) {
+            revert InvalidAddress();
+        }
+        if (rewardWallet == address(0)) {
+            revert InvalidRewardWallet();
+        }
+
+        // Set and validate symbols
+        string memory _finalYesSymbol = bytes(params.yesTokenSymbol).length > 0 ? params.yesTokenSymbol : "YES";
+        string memory _finalNoSymbol = bytes(params.noTokenSymbol).length > 0 ? params.noTokenSymbol : "NO";
+
+        if (!_isValidSymbol(_finalYesSymbol)) revert InvalidSymbolFormat(_finalYesSymbol);
+        if (!_isValidSymbol(_finalNoSymbol)) revert InvalidSymbolFormat(_finalNoSymbol);
+
+        // Check for duplicate symbols
+        if (keccak256(bytes(_finalYesSymbol)) == keccak256(bytes(_finalNoSymbol))) {
+            revert DuplicateSymbols(_finalYesSymbol);
+        }
+
+        // Create tokens
+        YesNoToken yesToken = new YesNoToken(string.concat(_finalYesSymbol, " Token"), _finalYesSymbol);
+        YesNoToken noToken = new YesNoToken(string.concat(_finalNoSymbol, " Token"), _finalNoSymbol);
+
+        address marketAddress;
+
+        if (version == 1) {
+            // V3 market creation
+            TruthMarket truthMarket = TruthMarket(Clones.clone(truthMarketMastercopy));
+            truthMarket.initialize(
+                params.marketQuestion,
+                params.marketSource,
+                params.additionalInfo,
+                params.endOfTrading,
+                params.yesNoTokenCap,
+                params.paymentTokenAddress,
+                address(yesToken),
+                address(noToken),
+                params.rewardToken,
+                params.rewardAmount
+            );
+            marketAddress = address(truthMarket);
+        } else {
+            // V4 market creation
+            TruthMarketV2 truthMarketV2 = TruthMarketV2(Clones.clone(truthMarketV2Mastercopy));
+            truthMarketV2.initialize(
+                params.marketQuestion,
+                params.marketSource,
+                params.additionalInfo,
+                params.endOfTrading,
+                params.yesNoTokenCap,
+                params.paymentTokenAddress,
+                address(yesToken),
+                address(noToken),
+                params.rewardToken,
+                params.rewardAmount,
+                params.fee,
+                params.tickSpacing,
+                params.hookAddress
+            );
+            marketAddress = address(truthMarketV2);
+        }
+
+        // Transfer rewards if any
+        if (params.rewardAmount > 0) {
+            IERC20Upgradeable(params.rewardToken).safeTransferFrom(rewardWallet, marketAddress, params.rewardAmount);
+        }
+
+        // Transfer token ownership
+        yesToken.transferOwnership(marketAddress);
+        noToken.transferOwnership(marketAddress);
+
+        // Register market
+        creatorAddress[marketAddress] = msg.sender;
+        _activeMarkets.add(marketAddress);
+
+        emit MarketCreatedWithDescription(
+            marketAddress,
+            params.marketQuestion,
+            params.marketSource,
+            params.additionalInfo,
+            params.endOfTrading,
+            params.yesNoTokenCap,
+            msg.sender
+        );
+
+        return marketAddress;
+    }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
 

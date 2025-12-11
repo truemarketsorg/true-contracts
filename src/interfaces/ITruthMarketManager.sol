@@ -32,6 +32,10 @@ interface ITruthMarketManager {
 
     function uniswapV3Factory() external view returns (address);
 
+    // V4-related address getter functions
+    function uniswapV4HookAddress() external view returns (address);
+    function truthMarketV2Mastercopy() external view returns (address);
+
     function creatorAddress(address _market) external view returns (address);
 
     function resolverAddress(address _market) external view returns (address);
@@ -85,7 +89,9 @@ interface ITruthMarketManager {
         address _safeBox,
         address _uniswapV3Factory,
         address _rewardWallet,
-        address _escalation
+        address _escalation,
+        address _truthMarketV2Mastercopy,
+        address _uniswapV4HookAddress
     ) external;
 
     function setPercentages(uint256 _safeBoxPercentage, uint256 _creatorPercentage, uint256 _resolverPercentage)
@@ -120,6 +126,19 @@ interface ITruthMarketManager {
         string memory _noTokenSymbol
     ) external;
 
+    function createMarketWithPaymentToken(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint _endOfTrading,
+        uint _yesNoTokenCap,
+        address _rewardToken,
+        uint _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        address _paymentToken
+    ) external;
+
     function createMarket(
         string memory _marketQuestion,
         string memory _marketSource,
@@ -129,6 +148,21 @@ interface ITruthMarketManager {
         address _rewardToken,
         uint _rewardAmount
     ) external;
+
+    // V4 market creation function
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing
+    ) external returns (address);
 
     function setEndOfTrading(address _market, uint256 _endOfTrading) external;
 
