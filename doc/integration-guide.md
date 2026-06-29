@@ -1,7 +1,7 @@
-# Truemarkets Integration Guide
+# Trueo Integration Guide
 
 This guide is for **third-party developers** (front-ends, aggregators, market makers,
-keepers) who want to integrate with deployed Truemarkets contracts. It documents only
+keepers) who want to integrate with deployed Trueo contracts. It documents only
 the contracts and functions that are meant to be called externally, organized by how
 much depth an integration needs. It is self-contained: everything you need is here, in
 [`network_config.json`](../network_config.json), or in the contract ABIs
