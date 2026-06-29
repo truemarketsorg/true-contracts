@@ -52,6 +52,8 @@ interface ITruthMarketManager {
 
     function secondChallengePeriod() external view returns (uint256);
 
+    function minimumTradingDuration() external view returns (uint256);
+
     function maxOracleCouncilMembers() external view returns (uint256);
 
     function yesNoTokenCap() external view returns (uint256);
@@ -118,10 +120,10 @@ interface ITruthMarketManager {
         string memory _marketQuestion,
         string memory _marketSource,
         string memory _additionalInfo,
-        uint _endOfTrading,
-        uint _yesNoTokenCap,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
         address _rewardToken,
-        uint _rewardAmount,
+        uint256 _rewardAmount,
         string memory _yesTokenSymbol,
         string memory _noTokenSymbol
     ) external;
@@ -130,10 +132,10 @@ interface ITruthMarketManager {
         string memory _marketQuestion,
         string memory _marketSource,
         string memory _additionalInfo,
-        uint _endOfTrading,
-        uint _yesNoTokenCap,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
         address _rewardToken,
-        uint _rewardAmount,
+        uint256 _rewardAmount,
         string memory _yesTokenSymbol,
         string memory _noTokenSymbol,
         address _paymentToken
@@ -143,10 +145,10 @@ interface ITruthMarketManager {
         string memory _marketQuestion,
         string memory _marketSource,
         string memory _additionalInfo,
-        uint _endOfTrading,
-        uint _yesNoTokenCap,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
         address _rewardToken,
-        uint _rewardAmount
+        uint256 _rewardAmount
     ) external;
 
     // V4 market creation function
@@ -162,6 +164,37 @@ interface ITruthMarketManager {
         string memory _noTokenSymbol,
         uint24 _fee,
         int24 _tickSpacing
+    ) external returns (address);
+
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing,
+        address _creator
+    ) external returns (address);
+
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing,
+        address _creator,
+        address _paymentToken
     ) external returns (address);
 
     function setEndOfTrading(address _market, uint256 _endOfTrading) external;

@@ -70,6 +70,10 @@ library PackedOrderIdLibrary {
         return (false, 0);
     }
 
+    function slotCount(uint256 orderCount) internal pure returns (uint256) {
+        return (orderCount + ORDERS_PER_SLOT - 1) / ORDERS_PER_SLOT;
+    }
+
     function getSlotAndPosition(uint256 orderIndex) internal pure returns (uint256 slot, uint256 position) {
         slot = orderIndex / ORDERS_PER_SLOT;
         position = orderIndex % ORDERS_PER_SLOT;
@@ -94,7 +98,7 @@ library PackedOrderIdLibrary {
     {
         uint256 processedCount = 0;
         uint256 firstPackedCount = 0;
-        
+
         // Count how many packed IDs go to the first array
         for (uint256 i = 0; i < orderIds.length; i++) {
             uint256 ordersInPacked = countOrders(orderIds[i]);
@@ -106,21 +110,21 @@ library PackedOrderIdLibrary {
                 break;
             }
         }
-        
+
         // Create arrays - first is exact size, second contains remaining
         first = new PackedOrderId[](firstPackedCount);
         second = new PackedOrderId[](orderIds.length - firstPackedCount);
-        
+
         // Populate first array
         for (uint256 i = 0; i < firstPackedCount; i++) {
             first[i] = orderIds[i];
         }
-        
+
         // Populate second array
         for (uint256 i = firstPackedCount; i < orderIds.length; i++) {
             second[i - firstPackedCount] = orderIds[i];
         }
-        
+
         return (first, second);
     }
 }

@@ -18,10 +18,11 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {IOrderManager} from "./interfaces/IOrderManager.sol";
 import {IFeeCollector} from "./interfaces/IFeeCollector.sol";
 import {ISwapValidator} from "./interfaces/ISwapValidator.sol";
+import {IPausablePool} from "./interfaces/IPausablePool.sol";
 import {TransientSlot} from "./libraries/TransientSlot.sol";
 import {Roles} from "./libraries/Roles.sol";
 
-contract TruthMarketHook is BaseHook, AccessControl {
+contract TruthMarketHook is BaseHook, AccessControl, IPausablePool {
     using SafeCast for uint256;
     using StateLibrary for IPoolManager;
     using TransientSlot for TransientSlot.Int256Slot;
@@ -37,10 +38,15 @@ contract TruthMarketHook is BaseHook, AccessControl {
     address public feeCollector;
     ISwapValidator public swapValidator;
 
+    mapping(address => bool) public authorizedPoolInitializers;
+    mapping(PoolId => bool) public override poolPaused;
+
     // Errors ////////////////////////////////////////////////////////
 
     error InvalidRecipient();
     error FeeAmountTooLarge();
+    error UnauthorizedPoolInitializer();
+    error PoolIsPaused(PoolId poolId);
 
     // Events ////////////////////////////////////////////////////////
 
@@ -50,6 +56,8 @@ contract TruthMarketHook is BaseHook, AccessControl {
     event SettleOrderFailed(PoolId poolId, int24 tickLower, int24 tickUpper, int256 liquidityDelta, bytes32 salt);
     event SwapValidatorUpdated(address indexed oldValidator, address indexed newValidator);
     event OrderManagerUpdated(address indexed oldManager, address indexed newManager);
+    event PoolInitializerUpdated(address indexed initializer, bool authorized);
+    event PoolPauseStatusChanged(PoolId indexed poolId, bool paused);
 
     constructor(IPoolManager _poolManager, IOrderManager _orderManager, address _feeCollector, address _admin)
         BaseHook(_poolManager)
@@ -62,7 +70,7 @@ contract TruthMarketHook is BaseHook, AccessControl {
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
-            beforeInitialize: false,
+            beforeInitialize: true,
             afterInitialize: false,
             beforeAddLiquidity: false,
             afterAddLiquidity: false,
@@ -79,11 +87,19 @@ contract TruthMarketHook is BaseHook, AccessControl {
         });
     }
 
+    function _beforeInitialize(address sender, PoolKey calldata, uint160) internal override returns (bytes4) {
+        if (!authorizedPoolInitializers[sender]) revert UnauthorizedPoolInitializer();
+        return BaseHook.beforeInitialize.selector;
+    }
+
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
         internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        PoolId poolId = key.toId();
+        if (poolPaused[poolId]) revert PoolIsPaused(poolId);
+
         // Get the current tick directly from slot0 instead of calculating from sqrtPriceX96
         // This accounts for Uniswap's tick adjustment behavior where the pool may set
         // currentTick = tickNext - 1 when sqrtPriceX96 == sqrtPriceNextX96 and zeroForOne = true
@@ -176,6 +192,14 @@ contract TruthMarketHook is BaseHook, AccessControl {
         emit SwapValidatorUpdated(oldValidator, _swapValidator);
     }
 
+    /// @notice Set whether an address is authorized to initialize pools using this hook
+    /// @param initializer The address to authorize or deauthorize
+    /// @param authorized Whether the address is authorized
+    function setAuthorizedPoolInitializer(address initializer, bool authorized) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        authorizedPoolInitializers[initializer] = authorized;
+        emit PoolInitializerUpdated(initializer, authorized);
+    }
+
     /// @notice Set the order manager contract
     /// @param _orderManager The address of the order manager
     function setOrderManager(address _orderManager) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -183,5 +207,17 @@ contract TruthMarketHook is BaseHook, AccessControl {
         address oldManager = address(orderManager);
         orderManager = IOrderManager(_orderManager);
         emit OrderManagerUpdated(oldManager, _orderManager);
+    }
+
+    /// @inheritdoc IPausablePool
+    function pausePool(PoolId poolId) external override onlyRole(Roles.OPERATOR_ROLE) {
+        poolPaused[poolId] = true;
+        emit PoolPauseStatusChanged(poolId, true);
+    }
+
+    /// @inheritdoc IPausablePool
+    function unpausePool(PoolId poolId) external override onlyRole(Roles.OPERATOR_ROLE) {
+        poolPaused[poolId] = false;
+        emit PoolPauseStatusChanged(poolId, false);
     }
 }

@@ -17,4 +17,14 @@ library Roles {
 
     // recipient fee management
     bytes32 public constant RECIPIENTS_MANAGER_ROLE = keccak256("RECIPIENTS_MANAGER_ROLE");
+
+    // launchpad
+    bytes32 public constant LAUNCHPAD_PROPOSER_ROLE = keccak256("LAUNCHPAD_PROPOSER_ROLE");
+    bytes32 public constant LAUNCHPAD_RESOLVER_ROLE = keccak256("LAUNCHPAD_RESOLVER_ROLE");
+
+    // market creation
+    bytes32 public constant MARKET_CREATOR_ROLE = keccak256("MARKET_CREATOR_ROLE");
+
+    // reward spending
+    bytes32 public constant REWARD_SPENDER_ROLE = keccak256("REWARD_SPENDER_ROLE");
 }

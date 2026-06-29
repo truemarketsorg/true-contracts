@@ -49,9 +49,15 @@ contract OrderManager is
 
     enum ActionType {
         ModifyLiquidity,
-        ResolveDeferredExecution,
+        ResolveDeferredTickRange,
         ResolveDeferredPayment,
         WithdrawToken
+    }
+
+    enum PartialFillResult {
+        NotFilled,
+        NewOrderCreated,
+        DustSettled
     }
 
     struct ModifyLiquidityPayload {
@@ -62,11 +68,6 @@ contract OrderManager is
         address taker;
     }
 
-    struct ResolveDeferredExecutionPayload {
-        PoolKey key;
-        bytes32 hashId;
-    }
-
     struct ResolveDeferredPaymentPayload {
         bytes32 hashId;
     }
@@ -75,6 +76,22 @@ contract OrderManager is
         Currency currency;
         uint256 amount;
     }
+
+    struct ResolveDeferredTickRangePayload {
+        PoolKey key;
+        bytes32 hashId;
+    }
+
+    /// @notice Hard cap on orders queued at a single tick threshold.
+    /// @dev Prevents a single dense tick from exceeding the block gas limit when
+    ///      the resolver retries a deferred tick range with unbounded `maxOrders`
+    ///      (see `_processTickRange`). Measured at ~29k gas per order end-to-end
+    ///      through `moveTick` + `_executeOrders`; 256 orders ≈ 7.4M gas, leaving
+    ///      ample block-gas headroom on Base. The cap is enforced only at user
+    ///      entry (`createOrder`) — partial-fill sub-order creation and requeue
+    ///      paths intentionally bypass it so swap callbacks cannot revert from a
+    ///      tick reaching the cap mid-execution.
+    uint256 public constant MAX_ORDERS_PER_TICK = 256;
 
     IAllowanceTransfer internal immutable _permit2;
 
@@ -122,11 +139,10 @@ contract OrderManager is
             _clearDelta(payload.key);
 
             return abi.encode(principalDelta);
-        } else if (actionType == ActionType.ResolveDeferredExecution) {
-            ResolveDeferredExecutionPayload memory payload =
-                abi.decode(encodedPayload, (ResolveDeferredExecutionPayload));
-
-            _resolveDeferredExecution(payload.key, payload.hashId);
+        } else if (actionType == ActionType.ResolveDeferredTickRange) {
+            ResolveDeferredTickRangePayload memory payload =
+                abi.decode(encodedPayload, (ResolveDeferredTickRangePayload));
+            _handleDeferredTickRange(payload.key, payload.hashId);
         } else if (actionType == ActionType.ResolveDeferredPayment) {
             ResolveDeferredPaymentPayload memory payload = abi.decode(encodedPayload, (ResolveDeferredPaymentPayload));
             _resolveDeferredPayment(payload.hashId);
@@ -148,6 +164,12 @@ contract OrderManager is
         emit MaximumExecutionCountUpdated(maximumExecutionCount_);
     }
 
+    function setMaxTicksPerSwapCallback(uint256 maxTicks_) external onlyRole(Roles.DEFAULT_ADMIN_ROLE) {
+        if (maxTicks_ == 0) revert InvalidMaxTicks();
+        maxTicksPerSwapCallback = maxTicks_;
+        emit IOrderManager.MaxTicksPerSwapCallbackUpdated(maxTicks_);
+    }
+
     function setFeeRecipient(address feeRecipient_) external onlyRole(Roles.DEFAULT_ADMIN_ROLE) {
         _setFeeRecipient(feeRecipient_);
         emit FeeRecipientUpdated(feeRecipient_);
@@ -163,20 +185,20 @@ contract OrderManager is
         emit AdminSafeUpdated(adminSafe_);
     }
 
-    function resolveDeferredExecution(PoolKey calldata poolKey, bytes32 hashId)
+    function resolveDeferredPayment(bytes32 hashId) external onlyRole(Roles.ORDER_RESOLVER_ROLE) {
+        poolManager.unlock(
+            abi.encode(ActionType.ResolveDeferredPayment, abi.encode(ResolveDeferredPaymentPayload(hashId)))
+        );
+    }
+
+    function resolveDeferredTickRange(PoolKey calldata poolKey, bytes32 hashId)
         external
         onlyRole(Roles.ORDER_RESOLVER_ROLE)
     {
         poolManager.unlock(
             abi.encode(
-                ActionType.ResolveDeferredExecution, abi.encode(ResolveDeferredExecutionPayload(poolKey, hashId))
+                ActionType.ResolveDeferredTickRange, abi.encode(ResolveDeferredTickRangePayload(poolKey, hashId))
             )
-        );
-    }
-
-    function resolveDeferredPayment(bytes32 hashId) external onlyRole(Roles.ORDER_RESOLVER_ROLE) {
-        poolManager.unlock(
-            abi.encode(ActionType.ResolveDeferredPayment, abi.encode(ResolveDeferredPaymentPayload(hashId)))
         );
     }
 
@@ -255,37 +277,78 @@ contract OrderManager is
             return;
         }
 
+        _collectAndProcessOrders(
+            poolKey,
+            fromTick,
+            toTick,
+            fromTick,
+            toTick,
+            toTick,
+            sqrtPriceX96,
+            maxTicksPerSwapCallback,
+            maximumExecutionCount
+        );
+    }
+
+    /// @notice Single entry point for moveTick + execute. moveTick's maxOrders bound
+    ///         guarantees extracted orders fit within budget — no split needed.
+    ///         Also ensures the library function is inlined only once.
+    function _collectAndProcessOrders(
+        PoolKey memory key,
+        int24 moveFrom,
+        int24 moveTo,
+        int24 origFrom,
+        int24 origTo,
+        int24 currentTick,
+        uint160 sqrtPriceX96,
+        uint256 maxTicks,
+        uint256 maxOrders
+    ) private {
+        PoolId poolId = key.toId();
         OrderBook storage orderBook = _orderBooks[poolId];
 
-        PackedOrderId[] memory orderIds = orderBook.moveTick(fromTick, toTick);
+        (PackedOrderId[] memory orderIds, int24 cursor, bool complete) =
+            orderBook.moveTick(moveFrom, moveTo, maxTicks, maxOrders);
 
-        uint256 totalOrders = orderIds.countOrders();
-
-        if (totalOrders > maximumExecutionCount) {
-            // EXECUTION SPLITTING FOR GAS OPTIMIZATION:
-            // When order count exceeds limit, execution is split into batches
-            // to prevent gas limit issues in high-volume scenarios.
-            //
-            // Example: 500 orders crossed when price moves 1000→1100
-            // - Immediate batch: First 100 orders execute in current transaction
-            // - Deferred batch: Remaining 400 orders stored for later execution
-            // - If price reverses to 1050 before resolution, deferred orders
-            //   outside the adjusted range (1051-1099) will be pushed back
-            (PackedOrderId[] memory immediateOrders, PackedOrderId[] memory deferredOrders) =
-                orderIds.split(maximumExecutionCount);
-
-            // Execute the first batch immediately
-            if (immediateOrders.length > 0) {
-                _executeOrders(poolKey, immediateOrders, fromTick, toTick, toTick, sqrtPriceX96);
-            }
-
-            // Defer only the excess orders
-            if (deferredOrders.length > 0) {
-                _deferExecution(poolId, deferredOrders, fromTick, toTick);
-            }
-        } else if (orderIds.length > 0) {
-            _executeOrders(poolKey, orderIds, fromTick, toTick, toTick, sqrtPriceX96);
+        if (!complete) {
+            _deferTickRange(poolId, origFrom, cursor, origTo);
         }
+
+        if (orderIds.length > 0) {
+            _executeOrders(
+                key,
+                orderIds,
+                origFrom,
+                origTo,
+                BatchBounds({moveFrom: moveFrom, moveTo: moveTo, cursor: cursor}),
+                currentTick,
+                sqrtPriceX96
+            );
+        }
+    }
+
+    /// @inheritdoc ExecutionDeferer
+    function _processTickRange(
+        PoolKey memory key,
+        DeferredTickRange memory deferred,
+        int24 currentTick,
+        uint160 sqrtPriceX96
+    ) internal override {
+        int24 rangeEnd = deferred.fromTick > deferred.toTick ? deferred.fromTick : deferred.toTick;
+        // Bounded ticks per call (re-defers remaining range automatically).
+        // Unbounded maxOrders so any individual tick can always be fully processed,
+        // avoiding infinite re-deferral when a single tick exceeds maximumExecutionCount.
+        _collectAndProcessOrders(
+            key,
+            deferred.cursorTick,
+            rangeEnd,
+            deferred.fromTick,
+            deferred.toTick,
+            currentTick,
+            sqrtPriceX96,
+            maxTicksPerSwapCallback,
+            type(uint256).max
+        );
     }
 
     function _settleOrder(PoolId poolId, uint32 orderId, BalanceDelta delta) internal {
@@ -398,10 +461,10 @@ contract OrderManager is
         // to perform partial fill, we need to push the order to the tickLower and tickUpper
         // otherwise, we push the order to the tickThreshold (tickLower or tickUpper) only
         if (params.enablePartialFill) {
-            orderBook.pushOrder(newOrder.partialThresholdLower(params.poolKey.tickSpacing), orderId);
-            orderBook.pushOrder(newOrder.partialThresholdUpper(params.poolKey.tickSpacing), orderId);
+            _pushOrderCapped(orderBook, newOrder.partialThresholdLower(params.poolKey.tickSpacing), orderId);
+            _pushOrderCapped(orderBook, newOrder.partialThresholdUpper(params.poolKey.tickSpacing), orderId);
         } else {
-            orderBook.pushOrder(newOrder.fulfillThreshold(), orderId);
+            _pushOrderCapped(orderBook, newOrder.fulfillThreshold(), orderId);
         }
 
         emit OrderCreated(
@@ -472,6 +535,7 @@ contract OrderManager is
         PackedOrderId[] memory packedOrderIds,
         int24 fromTick,
         int24 toTick,
+        BatchBounds memory batch,
         int24 currentTick,
         uint160 sqrtPriceX96
     ) internal override {
@@ -526,38 +590,7 @@ contract OrderManager is
                     shouldExecute && _executeOrder(key, orderId, order, fromTick, adjustedToTick, sqrtPriceX96);
 
                 if (!executed) {
-                    // PUSH-BACK LOGIC - ORDER RE-QUEUING:
-                    // Orders reach here when NOT executed. Common scenarios:
-                    // 1. Wrong direction: Tick moved opposite to order's required direction
-                    // 2. Threshold not crossed: Movement didn't reach order's trigger price
-                    // 3. Deferred execution with price reversal: Current tick no longer in execution range
-                    //
-                    // DEFERRED EXECUTION SCENARIO:
-                    // - Order at tick 1080, initially in range when tick moves 1000→1100
-                    // - Order gets deferred due to gas limits (>100 orders)
-                    // - Market reverses to tick 1050 before deferred execution
-                    // - When resolved, adjusted range is (1000, 1050)
-                    // - Order at 1080 is outside adjusted range, gets pushed back here
-                    //
-                    // For partial fill orders: Both ticks may need to be re-queued if they
-                    // were removed by moveTick. The _isTickInRange check ensures we only
-                    // push back ticks that were actually removed (avoiding duplicates).
-                    if (order.enablePartialFill) {
-                        int24 thresholdLower = order.partialThresholdLower(key.tickSpacing);
-
-                        if (_isTickInRange(thresholdLower, fromTick, toTick)) {
-                            orderBook.pushOrder(thresholdLower, orderId);
-                        }
-
-                        int24 thresholdUpper = order.partialThresholdUpper(key.tickSpacing);
-
-                        // to prevent duplication, check if the thresholds are different
-                        if (thresholdLower != thresholdUpper && _isTickInRange(thresholdUpper, fromTick, toTick)) {
-                            orderBook.pushOrder(thresholdUpper, orderId);
-                        }
-                    } else {
-                        orderBook.pushOrder(order.fulfillThreshold(), orderId);
-                    }
+                    _requeueUnexecuted(orderBook, order, orderId, key.tickSpacing, batch);
                 }
             }
         }
@@ -595,20 +628,19 @@ contract OrderManager is
                 bool isPartiallyFilled = _isTickInRange(partialFillThreshold, fromTick, toTick);
 
                 if (isPartiallyFilled) {
-                    (bool hasNewOrder, Order memory newOrder) = _partialFillOrder(key, orderId, toTick, sqrtPriceX96);
+                    (PartialFillResult fillResult, Order memory newOrder) =
+                        _partialFillOrder(key, orderId, toTick, sqrtPriceX96);
 
-                    if (!hasNewOrder) {
+                    if (fillResult == PartialFillResult.NotFilled) {
                         return false;
                     }
 
-                    // if the order is partially filled, we need to push the new order to the tick and remove the original order from the tick
-                    // else we push back the order to the tick
-                    if (hasNewOrder) {
-                        OrderBook storage orderBook = _orderBooks[key.toId()];
+                    OrderBook storage orderBook = _orderBooks[key.toId()];
 
-                        // remove the corresponding tick of this order
-                        orderBook.removeOrder(fulfillThreshold, orderId);
+                    // remove the order from the fulfillThreshold tick (the other tick not crossed by moveTick)
+                    orderBook.removeOrder(fulfillThreshold, orderId);
 
+                    if (fillResult == PartialFillResult.NewOrderCreated) {
                         int24 thresholdLower = newOrder.partialThresholdLower(key.tickSpacing);
                         int24 thresholdUpper = newOrder.partialThresholdUpper(key.tickSpacing);
 
@@ -723,7 +755,7 @@ contract OrderManager is
     ///  5. Order ID is reused for the new partial order, maintaining continuity
     function _partialFillOrder(PoolKey memory key, uint32 orderId, int24 currentTick, uint160 sqrtPriceX96)
         internal
-        returns (bool hasNewOrder, Order memory order)
+        returns (PartialFillResult result, Order memory order)
     {
         PoolId poolId = key.toId();
         order = pendingOrders[poolId][orderId];
@@ -754,7 +786,7 @@ contract OrderManager is
             // If the tick had moved far enough to create an invalid range, it would have been
             // fully filled and removed by _fulfillOrder() before reaching _partialFillOrder().
             if (newTickLower == oldTickLower) {
-                return (false, order);
+                return (PartialFillResult.NotFilled, order);
             }
 
             if (newTickLower >= newTickUpper) {
@@ -777,7 +809,7 @@ contract OrderManager is
 
             // refer to early return comment above
             if (newTickUpper == oldTickUpper) {
-                return (false, order);
+                return (PartialFillResult.NotFilled, order);
             }
 
             if (newTickLower >= newTickUpper) {
@@ -814,12 +846,12 @@ contract OrderManager is
             );
         }
 
-        hasNewOrder = newLiquidity > 0;
-
         // in general case, liquidity should be positive
         // but in case of dust remaining, check liquidity before recreate the order
-        // and emit OrderFilled event if liquidity is 0, to prevent order status stuck
-        if (hasNewOrder) {
+        // and settle the order if liquidity is 0, to prevent order status stuck
+        if (newLiquidity > 0) {
+            result = PartialFillResult.NewOrderCreated;
+
             ModifyLiquidityParams memory addParams =
                 _makeModifyLiquidityParams(newTickLower, newTickUpper, newLiquidity.toInt256(), orderId);
 
@@ -840,7 +872,7 @@ contract OrderManager is
             );
         } else {
             _settleOrder(poolId, orderId, principalDelta);
-            return (false, order);
+            return (PartialFillResult.DustSettled, order);
         }
 
         {
@@ -882,9 +914,7 @@ contract OrderManager is
         _handleDeltaResolveResult(result, amount, currency, taker);
     }
 
-    function _handleDeltaResolveResult(ResolveResult result, int256 amount, Currency currency, address taker)
-        internal
-    {
+    function _handleDeltaResolveResult(ResolveResult result, int256 amount, Currency currency, address taker) internal {
         // ignore zero or negative amount
         if (amount <= 0) {
             return;
@@ -904,14 +934,64 @@ contract OrderManager is
         returns (ModifyLiquidityParams memory)
     {
         return ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: liquidity,
-            salt: bytes32(uint256(orderId))
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: liquidity, salt: bytes32(uint256(orderId))
         });
     }
 
     function _isTickInRange(int24 tick, int24 fromTick, int24 toTick) internal pure returns (bool) {
-        return fromTick < toTick ? (fromTick <= tick && tick < toTick) : (toTick < tick && tick <= fromTick);
+        return fromTick < toTick ? (fromTick <= tick && tick <= toTick) : (toTick < tick && tick <= fromTick);
+    }
+
+    /// @dev Enforce the per-tick order cap at user entry. Only used by
+    ///      `createOrder` — partial-fill sub-order creation and requeue paths
+    ///      deliberately call `orderBook.pushOrder` directly so the cap cannot
+    ///      brick a swap callback when a partially-filled order lands on a tick
+    ///      that happens to be at capacity.
+    function _pushOrderCapped(OrderBook storage orderBook, int24 tick, uint32 orderId) internal {
+        if (orderBook.orderCounts[tick] >= MAX_ORDERS_PER_TICK) {
+            revert TickOrderCapReached(tick);
+        }
+        orderBook.pushOrder(tick, orderId);
+    }
+
+    /// @dev Requeue an order whose `_executeOrder()` returned false. For
+    ///      partial-fill orders each threshold is gated on `batch` because
+    ///      bounded `moveTick()` may have left one of them alive. For
+    ///      non-partial-fill orders the single threshold is always safe to
+    ///      requeue: the order reached this point only because its tick was
+    ///      extracted, which means `moveTick()` deleted it.
+    function _requeueUnexecuted(
+        OrderBook storage orderBook,
+        Order memory order,
+        uint32 orderId,
+        int24 tickSpacing,
+        BatchBounds memory batch
+    ) internal {
+        if (order.enablePartialFill) {
+            int24 thresholdLower = order.partialThresholdLower(tickSpacing);
+            if (_wasProcessedThisBatch(thresholdLower, batch)) {
+                orderBook.pushOrder(thresholdLower, orderId);
+            }
+
+            int24 thresholdUpper = order.partialThresholdUpper(tickSpacing);
+            if (thresholdLower != thresholdUpper && _wasProcessedThisBatch(thresholdUpper, batch)) {
+                orderBook.pushOrder(thresholdUpper, orderId);
+            }
+        } else {
+            orderBook.pushOrder(order.fulfillThreshold(), orderId);
+        }
+    }
+
+    /// @dev True iff `tick` was deleted by the `moveTick()` call described by
+    ///      `batch`. Relies on `moveTick()`'s monotonic low→high bitmap walk:
+    ///      when anything is deleted, the removed set is every initialized
+    ///      tick in `[moveFrom, cursor]` (upward move) or `(moveTo, cursor]`
+    ///      (downward move). Since callers only query thresholds of orders
+    ///      that appeared in `packedOrderIds`, those ticks are initialized by
+    ///      construction and interval membership implies set membership.
+    function _wasProcessedThisBatch(int24 tick, BatchBounds memory batch) internal pure returns (bool) {
+        return batch.moveFrom < batch.moveTo
+            ? (batch.moveFrom <= tick && tick <= batch.cursor)
+            : (batch.moveTo < tick && tick <= batch.cursor);
     }
 }
