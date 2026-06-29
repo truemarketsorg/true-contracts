@@ -143,75 +143,136 @@ library OrderBookLibrary {
         }
     }
 
-    /// @notice Collects and removes all orders between two ticks
-    /// @dev Used when price moves to execute all orders in the crossed range
+    /// @notice Collects and removes orders between two ticks, bounded by tick and order limits
+    /// @dev Stops at tick boundaries — never processes a partial tick. Stops when EITHER
+    ///      maxTicks initialized ticks have been processed OR the next tick would push
+    ///      the total order count above maxOrders. Returns a cursor for resumption.
+    ///
+    ///      Iteration walks the tick bitmap monotonically low→high and deletes
+    ///      every initialized tick it encounters until a bound is hit. As a
+    ///      consequence, when `affectedOrderIds.length > 0` the set of deleted
+    ///      ticks is exactly every initialized tick in `[fromTick, cursor]` on an
+    ///      upward move and `(toTick, cursor]` on a downward move. Callers that
+    ///      need to gate requeue-after-failure can rely on this interval instead
+    ///      of tracking the removed set explicitly.
     /// @param self The order book storage reference
-    /// @param fromTick The starting tick (exclusive)
-    /// @param toTick The ending tick (exclusive)
+    /// @param fromTick The starting tick
+    /// @param toTick The ending tick
+    /// @param maxTicks Maximum number of initialized ticks to process
+    /// @param maxOrders Maximum number of orders to collect (stops before exceeding)
     /// @return affectedOrderIds Array of packed order IDs that were affected
-    function moveTick(OrderBook storage self, int24 fromTick, int24 toTick)
+    /// @return cursor The last processed tick (used to resume from this point)
+    /// @return complete True if the entire range was covered
+    function moveTick(OrderBook storage self, int24 fromTick, int24 toTick, uint256 maxTicks, uint256 maxOrders)
         internal
-        returns (PackedOrderId[] memory affectedOrderIds)
+        returns (PackedOrderId[] memory affectedOrderIds, int24 cursor, bool complete)
     {
-        if (fromTick == toTick) {
-            return new PackedOrderId[](0);
+        if (fromTick == toTick || self.tickSpacing == 0) {
+            return (new PackedOrderId[](0), toTick, true);
+        }
+        if (maxTicks == 0) {
+            return (new PackedOrderId[](0), fromTick, false);
         }
 
-        // orderbook is not initialized, no orders in the book
-        if (self.tickSpacing == 0) {
-            return new PackedOrderId[](0);
-        }
+        (int24 rangeStart, int24 rangeEnd) = fromTick < toTick ? (fromTick - 1, toTick + 1) : (toTick, fromTick + 1);
 
-        // Allocate array for packed order IDs (8 orders per PackedOrderId)
-        affectedOrderIds = new PackedOrderId[](countPackedOrders(self, fromTick, toTick));
+        // Pre-pass: count packed slots within budget. `rangeExhausted` must be tracked
+        // explicitly; a `ticksToProcess < maxTicks` proxy wrongly reports incomplete when
+        // the range happens to contain exactly `maxTicks` initialized ticks.
+        uint256 packedCount;
+        uint256 ticksToProcess;
+        uint256 ordersToProcess;
+        bool orderBudgetHit;
+        bool rangeExhausted;
+        {
+            int24 tick = rangeStart;
+            while (tick < rangeEnd) {
+                (int24 next, bool initialized) =
+                    self.tickBitmap.nextInitializedTickWithinOneWord(tick, self.tickSpacing, false);
 
-        // Only orders from fromTick (inclusive) to toTick (exclusive) will be affected.
-        // So we need to move fromTick one tick to include orders at the fromTick position.
-        (fromTick, toTick) = fromTick < toTick ? (fromTick - 1, toTick) : (toTick, fromTick + 1);
+                if (initialized && next < rangeEnd) {
+                    if (ticksToProcess >= maxTicks) break;
 
-        uint256 index = 0;
+                    uint32 tickOrderCount = self.orderCounts[next];
+                    if (ordersToProcess + tickOrderCount > maxOrders) {
+                        orderBudgetHit = true;
+                        // Cursor points at the unprocessed dense tick so the resolver can
+                        // retry it unbounded. Overwritten by the copy pass when ticksToProcess > 0.
+                        cursor = next;
+                        break;
+                    }
 
-        int24 tick = fromTick;
-        while (tick < toTick) {
-            (int24 next, bool initialized) =
-                self.tickBitmap.nextInitializedTickWithinOneWord(tick, self.tickSpacing, false);
-
-            if (initialized && next < toTick) {
-                // Copy all PackedOrderId values at this tick
-                PackedOrderId[] storage packOrderIds = self.orders[next];
-                uint256 len = packOrderIds.length;
-                for (uint256 i = 0; i < len; i++) {
-                    affectedOrderIds[index++] = packOrderIds[i];
+                    packedCount += PackedOrderIdLibrary.slotCount(tickOrderCount);
+                    ordersToProcess += tickOrderCount;
+                    ticksToProcess++;
                 }
 
-                // Clear the tick
-                delete self.orders[next];
-                self.orderCounts[next] = 0;
-                self.tickBitmap.flipTick(next, self.tickSpacing);
+                if (next >= rangeEnd) {
+                    rangeExhausted = true;
+                    break;
+                }
+                tick = next;
             }
-
-            if (next >= toTick) break;
-            tick = next;
         }
 
-        // Resize array to actual packed count
+        if (ticksToProcess == 0) {
+            if (orderBudgetHit) {
+                return (new PackedOrderId[](0), cursor, false);
+            }
+            return (new PackedOrderId[](0), rangeExhausted ? toTick : fromTick, rangeExhausted);
+        }
+
+        // Copy + delete pass (processes exactly ticksToProcess initialized ticks)
+        affectedOrderIds = new PackedOrderId[](packedCount);
+        uint256 index;
+        {
+            int24 tick = rangeStart;
+            uint256 ticksDone;
+            while (tick < rangeEnd && ticksDone < ticksToProcess) {
+                (int24 next, bool initialized) =
+                    self.tickBitmap.nextInitializedTickWithinOneWord(tick, self.tickSpacing, false);
+
+                if (initialized && next < rangeEnd) {
+                    PackedOrderId[] storage packOrderIds = self.orders[next];
+                    uint256 len = PackedOrderIdLibrary.slotCount(self.orderCounts[next]);
+                    for (uint256 i = 0; i < len; i++) {
+                        affectedOrderIds[index++] = packOrderIds[i];
+                    }
+
+                    delete self.orders[next];
+                    self.orderCounts[next] = 0;
+                    self.tickBitmap.flipTick(next, self.tickSpacing);
+
+                    ticksDone++;
+                    cursor = next;
+                }
+
+                if (next >= rangeEnd) break;
+                tick = next;
+            }
+        }
+
         assembly {
             mstore(affectedOrderIds, index)
         }
+
+        // rangeExhausted and orderBudgetHit are mutually exclusive by construction
+        // (each is the sole setter before its break), so rangeExhausted alone suffices.
+        complete = rangeExhausted;
     }
 
     /// @notice Counts the total number of orders in a tick range
-    /// @dev The count includes the `fromTick` but excludes the `toTick`
+    /// @dev For upward moves, includes both endpoints. For downward moves, includes fromTick, excludes toTick.
     /// @param self The order book storage reference
-    /// @param fromTick The starting tick (inclusive)
-    /// @param toTick The ending tick (exclusive)
+    /// @param fromTick The starting tick
+    /// @param toTick The ending tick
     /// @return count The total number of individual orders in the range
     function countOrders(OrderBook storage self, int24 fromTick, int24 toTick) internal view returns (uint256 count) {
         if (self.tickSpacing == 0) {
             return 0;
         }
 
-        (fromTick, toTick) = fromTick < toTick ? (fromTick - 1, toTick) : (toTick, fromTick + 1);
+        (fromTick, toTick) = fromTick < toTick ? (fromTick - 1, toTick + 1) : (toTick, fromTick + 1);
 
         int24 tick = fromTick;
         while (tick < toTick) {
@@ -228,10 +289,11 @@ library OrderBookLibrary {
     }
 
     /// @notice Counts the number of packed order storage slots in a tick range
-    /// @dev The count includes the `fromTick` but excludes the `toTick`. Each PackedOrderId can contain up to 8 orders
+    /// @dev For upward moves, includes both endpoints. For downward moves, includes fromTick, excludes toTick.
+    ///      Each PackedOrderId can contain up to 8 orders.
     /// @param self The order book storage reference
-    /// @param fromTick The starting tick (inclusive)
-    /// @param toTick The ending tick (exclusive)
+    /// @param fromTick The starting tick
+    /// @param toTick The ending tick
     /// @return count The number of PackedOrderId storage slots needed
     function countPackedOrders(OrderBook storage self, int24 fromTick, int24 toTick)
         internal
@@ -242,7 +304,7 @@ library OrderBookLibrary {
             return 0;
         }
 
-        (fromTick, toTick) = fromTick < toTick ? (fromTick - 1, toTick) : (toTick, fromTick + 1);
+        (fromTick, toTick) = fromTick < toTick ? (fromTick - 1, toTick + 1) : (toTick, fromTick + 1);
 
         int24 tick = fromTick;
         while (tick < toTick) {
@@ -250,7 +312,7 @@ library OrderBookLibrary {
                 self.tickBitmap.nextInitializedTickWithinOneWord(tick, self.tickSpacing, false);
 
             if (initialized && next < toTick) {
-                count += self.orders[next].length;
+                count += PackedOrderIdLibrary.slotCount(self.orderCounts[next]);
             }
 
             if (next >= toTick) break;

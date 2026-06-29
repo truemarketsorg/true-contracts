@@ -26,4 +26,14 @@ interface ISwapValidator {
     /// @param tickLowerBoundary The lower tick boundary
     /// @param tickUpperBoundary The upper tick boundary
     function setBoundaries(PoolId poolId, int24 tickLowerBoundary, int24 tickUpperBoundary) external;
+
+    /// @notice Returns the tick boundaries for a pool
+    /// @param poolId The pool ID
+    /// @return tickLowerBoundary The lower tick boundary
+    /// @return tickUpperBoundary The upper tick boundary
+    /// @return isSet Whether boundaries have been initialized
+    function poolBoundaries(PoolId poolId)
+        external
+        view
+        returns (int24 tickLowerBoundary, int24 tickUpperBoundary, bool isSet);
 }

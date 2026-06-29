@@ -19,6 +19,12 @@ interface IOrderManager {
 
     error InvalidRecipient(address recipient);
 
+    error InvalidMaxTicks();
+
+    /// @notice Thrown when a new order would push the tick's order count above `MAX_ORDERS_PER_TICK`
+    /// @param tick The threshold tick that is at capacity
+    error TickOrderCapReached(int24 tick);
+
     event OrderCreated(
         PoolId indexed poolId,
         uint32 indexed orderId,
@@ -49,9 +55,11 @@ interface IOrderManager {
 
     event MaximumExecutionCountUpdated(uint256 maximumExecutionCount);
 
-    event ExecutionDeferred(PoolId indexed poolId, bytes32 indexed hashId);
+    event TickRangeDeferred(PoolId indexed poolId, bytes32 indexed hashId, int24 cursorTick, int24 toTick);
 
-    event DeferredExecutionResolved(PoolId indexed poolId, bytes32 indexed hashId, int24 fromTick, int24 toTick);
+    event DeferredTickRangeResolved(PoolId indexed poolId, bytes32 indexed hashId, int24 cursorTick, int24 toTick);
+
+    event MaxTicksPerSwapCallbackUpdated(uint256 maxTicksPerSwapCallback);
 
     enum PaymentDeferredReason {
         InsufficientFundsTemporarily,
@@ -106,11 +114,6 @@ interface IOrderManager {
     /// @param whitelisted Whether the pool should be whitelisted
     function setPoolWhitelist(PoolId poolId, bool whitelisted) external;
 
-    /// @notice Resolves deferred executions
-    /// @param poolKey The key of the pool containing the executions
-    /// @param hashId The hash of the executions to resolve
-    function resolveDeferredExecution(PoolKey calldata poolKey, bytes32 hashId) external;
-
     /// @notice Resolves deferred payments
     /// @param hashId The hash of the payment to resolve
     function resolveDeferredPayment(bytes32 hashId) external;
@@ -146,4 +149,13 @@ interface IOrderManager {
     /// @notice Sets the admin safe address for receiving funds from blacklisted addresses
     /// @param adminSafe_ The new admin safe address
     function setAdminSafe(address adminSafe_) external;
+
+    /// @notice Resolves a deferred tick range that was not fully processed during a swap callback
+    /// @param poolKey The key of the pool containing the deferred tick range
+    /// @param hashId The hash identifier of the deferred tick range
+    function resolveDeferredTickRange(PoolKey calldata poolKey, bytes32 hashId) external;
+
+    /// @notice Sets the maximum number of initialized ticks processed per swap callback
+    /// @param maxTicks The new maximum tick count
+    function setMaxTicksPerSwapCallback(uint256 maxTicks) external;
 }

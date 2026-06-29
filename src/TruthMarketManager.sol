@@ -37,7 +37,7 @@ contract TruthMarketManager is
     using AddressSetLib for AddressSetLib.AddressSet;
 
     // Structs ////////////////////////////////////////////////////
-    
+
     struct MarketCreationParams {
         string marketQuestion;
         string marketSource;
@@ -87,7 +87,7 @@ contract TruthMarketManager is
     mapping(address => address) public resolverAddress;
 
     // V4-related storage variables
-    address public uniswapV4HookAddress;    // V4 Hook contract address
+    address public uniswapV4HookAddress; // V4 Hook contract address
     address public truthMarketV2Mastercopy; // TruthMarketV2 implementation contract
 
     // Events ////////////////////////////////////////////////////////
@@ -149,6 +149,10 @@ contract TruthMarketManager is
     error BondsNotSettled(address market);
     error InvalidFee(uint24 fee);
     error InvalidV2Mastercopy();
+    error InvalidCreator();
+    error InvalidPaymentToken();
+    error AdminRoleLockedToOwner();
+    error OwnershipRenounceDisabled();
 
     // Modifiers ////////////////////////////////////////////////////////
 
@@ -252,7 +256,7 @@ contract TruthMarketManager is
         string memory _yesTokenSymbol,
         string memory _noTokenSymbol,
         address _paymentToken
-    ) public nonReentrant whenNotPaused onlyOracleCouncilAndOwner {
+    ) public nonReentrant whenNotPaused onlyRole(Roles.MARKET_CREATOR_ROLE) {
         MarketCreationParams memory params = MarketCreationParams({
             marketQuestion: _marketQuestion,
             marketSource: _marketSource,
@@ -268,8 +272,8 @@ contract TruthMarketManager is
             tickSpacing: 0, // V3 doesn't use tickSpacing
             hookAddress: address(0) // V3 doesn't use hook address
         });
-        
-        _createMarketCommon(params, 1);
+
+        _createMarketCommon(params, 1, msg.sender);
     }
 
     /// @notice Creates a new V4 market with dynamic fee and tick spacing
@@ -296,15 +300,128 @@ contract TruthMarketManager is
         string memory _noTokenSymbol,
         uint24 _fee,
         int24 _tickSpacing
-    ) external nonReentrant whenNotPaused onlyOracleCouncilAndOwner returns (address) {
-        // V4-specific validations
+    ) external nonReentrant whenNotPaused onlyRole(Roles.MARKET_CREATOR_ROLE) returns (address) {
+        return _createMarketV2Internal(
+                _marketQuestion,
+                _marketSource,
+                _additionalInfo,
+                _endOfTrading,
+                _yesNoTokenCap,
+                _rewardToken,
+                _rewardAmount,
+                _yesTokenSymbol,
+                _noTokenSymbol,
+                _fee,
+                _tickSpacing,
+                msg.sender,
+                paymentToken
+            );
+    }
+
+    /// @notice Creates a new V4 market with an explicit creator address
+    /// @dev Used by launcher contracts where msg.sender is not the actual market creator
+    /// @param _creator The canonical creator address to record for this market
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing,
+        address _creator
+    ) external nonReentrant whenNotPaused onlyRole(Roles.MARKET_CREATOR_ROLE) returns (address) {
+        return _createMarketV2Internal(
+                _marketQuestion,
+                _marketSource,
+                _additionalInfo,
+                _endOfTrading,
+                _yesNoTokenCap,
+                _rewardToken,
+                _rewardAmount,
+                _yesTokenSymbol,
+                _noTokenSymbol,
+                _fee,
+                _tickSpacing,
+                _creator,
+                paymentToken
+            );
+    }
+
+    /// @notice Creates a new V4 market with an explicit creator and payment token
+    /// @dev Used by launcher contracts that need to pin the market's payment token to a
+    ///      value they already hold (e.g. a Launchpad's own `paymentToken`), so that the
+    ///      created market cannot drift if `setAddresses()` later rotates the manager's
+    ///      global `paymentToken`. The supplied token is used as-is — callers are
+    ///      responsible for passing a value that matches their own escrowed funds.
+    /// @param _creator The canonical creator address to record for this market
+    /// @param _paymentToken The payment token to pin on the created market (must be non-zero)
+    function createMarketV2(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing,
+        address _creator,
+        address _paymentToken
+    ) external nonReentrant whenNotPaused onlyRole(Roles.MARKET_CREATOR_ROLE) returns (address) {
+        return _createMarketV2Internal(
+            _marketQuestion,
+            _marketSource,
+            _additionalInfo,
+            _endOfTrading,
+            _yesNoTokenCap,
+            _rewardToken,
+            _rewardAmount,
+            _yesTokenSymbol,
+            _noTokenSymbol,
+            _fee,
+            _tickSpacing,
+            _creator,
+            _paymentToken
+        );
+    }
+
+    /// @dev Shared implementation for the explicit-creator `createMarketV2` overloads.
+    ///      Runs cheap calldata checks before any SLOAD so reverts on bad input stay cheap.
+    function _createMarketV2Internal(
+        string memory _marketQuestion,
+        string memory _marketSource,
+        string memory _additionalInfo,
+        uint256 _endOfTrading,
+        uint256 _yesNoTokenCap,
+        address _rewardToken,
+        uint256 _rewardAmount,
+        string memory _yesTokenSymbol,
+        string memory _noTokenSymbol,
+        uint24 _fee,
+        int24 _tickSpacing,
+        address _creator,
+        address _paymentToken
+    ) private returns (address) {
         if (_fee > 10000) {
             revert InvalidFee(_fee);
+        }
+        if (_creator == address(0)) {
+            revert InvalidCreator();
+        }
+        if (_paymentToken == address(0)) {
+            revert InvalidPaymentToken();
         }
         if (truthMarketV2Mastercopy == address(0)) {
             revert InvalidV2Mastercopy();
         }
-        
+
         MarketCreationParams memory params = MarketCreationParams({
             marketQuestion: _marketQuestion,
             marketSource: _marketSource,
@@ -315,13 +432,13 @@ contract TruthMarketManager is
             rewardAmount: _rewardAmount,
             yesTokenSymbol: _yesTokenSymbol,
             noTokenSymbol: _noTokenSymbol,
-            paymentTokenAddress: paymentToken,
+            paymentTokenAddress: _paymentToken,
             fee: _fee,
             tickSpacing: _tickSpacing,
             hookAddress: uniswapV4HookAddress
         });
-        
-        return _createMarketCommon(params, 2);
+
+        return _createMarketCommon(params, 2, _creator);
     }
 
     /// @notice Resolves a market by Oracle Council decision
@@ -330,7 +447,7 @@ contract TruthMarketManager is
     function resolveMarketByCouncil(address _marketAddress, uint256 _outcomePosition)
         external
         whenNotPaused
-        onlyOracleCouncilAndOwner
+        onlyOracleCouncil
     {
         if (ITruthMarket(_marketAddress).paused()) {
             revert InvalidActionWhilePaused();
@@ -364,10 +481,9 @@ contract TruthMarketManager is
             revert InvalidActionWhilePaused();
         }
 
-        ITruthMarket(_marketAddress).proposeResolution(_outcomePosition);        
-        IOracleBonds(oracleBonds).sendResolverBondToMarket(
-            _marketAddress, msg.sender, ITruthMarket(_marketAddress).resolverBondAmount()
-        );
+        ITruthMarket(_marketAddress).proposeResolution(_outcomePosition);
+        IOracleBonds(oracleBonds)
+            .sendResolverBondToMarket(_marketAddress, msg.sender, ITruthMarket(_marketAddress).resolverBondAmount());
 
         resolverAddress[_marketAddress] = msg.sender;
         emit ResolutionProposed(_marketAddress, _outcomePosition);
@@ -379,7 +495,7 @@ contract TruthMarketManager is
     function resetMarketByCouncil(address _marketAddress, bool _returnToOpenForResolution)
         external
         whenNotPaused
-        onlyOracleCouncilAndOwner
+        onlyOracleCouncil
     {
         if (ITruthMarket(_marketAddress).paused()) {
             revert InvalidActionWhilePaused();
@@ -399,21 +515,20 @@ contract TruthMarketManager is
     /// @notice Disputes a market's proposed resolution
     /// @param _marketAddress The address of the market to dispute
     /// @param _disputor The address of the account disputing the resolution
-    function disputeMarket(address _marketAddress, address _disputor)
-        external
-        onlyOracleCouncilAndOwner
-        whenNotPaused
-    {
+    function disputeMarket(address _marketAddress, address _disputor) external onlyOracleCouncilAndOwner whenNotPaused {
         if (!isActiveMarket(_marketAddress)) {
             revert InvalidMarket(_marketAddress);
         }
         if (ITruthMarket(_marketAddress).paused()) {
             revert InvalidActionWhilePaused();
         }
-        IOracleBonds(oracleBonds).sendDisputorBondToMarket(
-            _marketAddress, _disputor, ITruthMarket(_marketAddress).disputerBondAmount()
-        );
-        if (ITruthMarket(_marketAddress).getCurrentStatus() == MarketStatus.ResolutionProposed) {
+        MarketStatus currentStatus = ITruthMarket(_marketAddress).getCurrentStatus();
+        if (currentStatus != MarketStatus.ResolutionProposed && currentStatus != MarketStatus.DisputeRaised) {
+            revert InvalidMarketStatus(currentStatus);
+        }
+        IOracleBonds(oracleBonds)
+            .sendDisputorBondToMarket(_marketAddress, _disputor, ITruthMarket(_marketAddress).disputerBondAmount());
+        if (currentStatus == MarketStatus.ResolutionProposed) {
             ITruthMarket(_marketAddress).raiseDispute();
         }
     }
@@ -432,9 +547,10 @@ contract TruthMarketManager is
         if (ITruthMarket(_marketAddress).paused()) {
             revert InvalidActionWhilePaused();
         }
-        IOracleBonds(oracleBonds).sendEscalatedDisputorBondToMarket(
-            _marketAddress, _disputor, ITruthMarket(_marketAddress).escalatorBondAmount()
-        );
+        IOracleBonds(oracleBonds)
+            .sendEscalatedDisputorBondToMarket(
+                _marketAddress, _disputor, ITruthMarket(_marketAddress).escalatorBondAmount()
+            );
         ITruthMarket(_marketAddress).raiseEscalatedDispute();
     }
 
@@ -469,24 +585,28 @@ contract TruthMarketManager is
     /// @notice Sets the duration of the first challenge period for a market
     /// @param _market The address of the market to update
     /// @param _firstChallengePeriod The new duration in seconds
-    function setFirstChallengePeriod(address _market, uint256 _firstChallengePeriod)
-        external
-        onlyOwner
-    {
+    function setFirstChallengePeriod(address _market, uint256 _firstChallengePeriod) external onlyOwner {
         ITruthMarket(_market).setFirstChallengePeriod(_firstChallengePeriod);
     }
 
     /// @notice Sets the duration of the second challenge period for a market
     /// @param _market The address of the market to update
     /// @param _secondChallengePeriod The new duration in seconds
-    function setSecondChallengePeriod(address _market, uint256 _secondChallengePeriod)
-        external
-        onlyOwner
-    {
+    function setSecondChallengePeriod(address _market, uint256 _secondChallengePeriod) external onlyOwner {
         ITruthMarket(_market).setSecondChallengePeriod(_secondChallengePeriod);
     }
 
     /// @notice Updates various contract addresses used by the market manager
+    /// @dev WARNING: `oracleCouncilAddress` and `escalationAddress` are cached by each
+    ///      TruthMarket / TruthMarketV2 instance at initialization time and are not
+    ///      refreshed afterwards. Rotating either of these proxy addresses while any
+    ///      market is still live in the dispute / escalation / reset / bond-settlement
+    ///      lifecycle can leave that market un-settleable, because the manager will
+    ///      authorize the new contracts while existing markets still read dispute state
+    ///      from the old ones. In normal operation these contracts are upgraded in
+    ///      place via UUPS, which preserves both the proxy address and historical
+    ///      dispute state. Before rotating these two proxies, verify that no market is
+    ///      currently in the dispute / escalation / reset / bond-settlement lifecycle.
     /// @param _truthMarketMastercopy The address of the truth market implementation contract
     /// @param _oracleCouncilAddress The address of the Oracle Council contract
     /// @param _paymentToken The address of the payment token contract
@@ -530,13 +650,11 @@ contract TruthMarketManager is
         }
 
         // V4-related address updates
-        if (_truthMarketV2Mastercopy != address(0) && 
-            _truthMarketV2Mastercopy != truthMarketV2Mastercopy) {
+        if (_truthMarketV2Mastercopy != address(0) && _truthMarketV2Mastercopy != truthMarketV2Mastercopy) {
             truthMarketV2Mastercopy = _truthMarketV2Mastercopy;
         }
-        
-        if (_uniswapV4HookAddress != address(0) && 
-            _uniswapV4HookAddress != uniswapV4HookAddress) {
+
+        if (_uniswapV4HookAddress != address(0) && _uniswapV4HookAddress != uniswapV4HookAddress) {
             uniswapV4HookAddress = _uniswapV4HookAddress;
         }
 
@@ -639,6 +757,12 @@ contract TruthMarketManager is
 
     /// @notice Updates the Oracle Bonds contract address
     /// @param _oracleBonds The new Oracle Bonds contract address
+    /// @dev WARNING: OracleBonds is a UUPS upgradeable proxy — normal upgrades do NOT require changing
+    /// this address. Only call this function to point to an entirely new proxy deployment.
+    /// The `bondSettled` gate does NOT cover disputor bonds still claimable via
+    /// `OracleCouncil.claimUnclosedDisputeBonds()`. Switching the address while unclosed dispute bonds
+    /// remain in the old contract will break the permissionless claim path for those disputors.
+    /// Before calling, verify that no disputor bonds remain claimable in the old OracleBonds contract.
     function setOracleBonds(address _oracleBonds) external onlyOwner {
         if (_oracleBonds == address(0)) {
             revert InvalidAddress();
@@ -669,16 +793,22 @@ contract TruthMarketManager is
      * @notice Updates the Oracle Bonds address in batches to avoid gas limit issues
      * @dev Processes a specified number of markets per transaction to check if bonds are settled
      * @dev Updates the Oracle Bonds address only after all markets have been verified
+     * @dev WARNING: OracleBonds is a UUPS upgradeable proxy — normal upgrades do NOT require changing
+     * this address. Only call this function to point to an entirely new proxy deployment.
+     * The `bondSettled` gate does NOT cover disputor bonds still claimable via
+     * `OracleCouncil.claimUnclosedDisputeBonds()`. Switching the address while unclosed dispute bonds
+     * remain in the old contract will break the permissionless claim path for those disputors.
+     * Before calling, verify that no disputor bonds remain claimable in the old OracleBonds contract.
      * @param _oracleBonds New Oracle Bonds address
      * @param batchSize Number of markets to check in this transaction
      * @return completed Whether all markets have been processed
      * @return processedCount Number of markets processed in this transaction
      * @return totalCount Total number of markets to process
      */
-    function setOracleBondsWithBatchCheck(address _oracleBonds, uint256 batchSize) 
-        external 
-        onlyOwner 
-        returns (bool completed, uint256 processedCount, uint256 totalCount) 
+    function setOracleBondsWithBatchCheck(address _oracleBonds, uint256 batchSize)
+        external
+        onlyOwner
+        returns (bool completed, uint256 processedCount, uint256 totalCount)
     {
         if (_oracleBonds == address(0)) {
             revert InvalidAddress();
@@ -686,7 +816,7 @@ contract TruthMarketManager is
 
         uint256 marketCount = _activeMarkets.elements.length;
         uint256 endIndex = MathUpgradeable.min(oracleBondsCheckIndex + batchSize, marketCount);
-        
+
         // Process the current batch
         for (uint256 i = oracleBondsCheckIndex; i < endIndex; i++) {
             address market = _activeMarkets.elements[i];
@@ -694,32 +824,32 @@ contract TruthMarketManager is
                 revert BondsNotSettled(market);
             }
         }
-        
+
         // Update the processed index
         uint256 previousIndex = oracleBondsCheckIndex;
         oracleBondsCheckIndex = endIndex;
-        
+
         // If all markets have been processed, update the Oracle Bonds address
         if (oracleBondsCheckIndex == marketCount) {
             // Reset the index for future operations
             oracleBondsCheckIndex = 0;
-            
+
             // Remove old Oracle Bonds approval
             if (oracleBonds != address(0)) {
                 IERC20(paymentToken).approve(address(oracleBonds), 0);
             }
-            
+
             oracleBonds = _oracleBonds;
             // Approve new Oracle Bonds
             IERC20(paymentToken).approve(address(oracleBonds), type(uint256).max);
-            
+
             emit NewOracleBonds(_oracleBonds);
-            
+
             completed = true;
         } else {
             completed = false;
         }
-        
+
         return (completed, endIndex - previousIndex, marketCount);
     }
 
@@ -760,7 +890,10 @@ contract TruthMarketManager is
     /// @notice Internal function to create markets with shared logic
     /// @param params Market creation parameters
     /// @param version Market version (1 for V3, 2 for V4)
-    function _createMarketCommon(MarketCreationParams memory params, uint8 version) internal returns (address) {
+    function _createMarketCommon(MarketCreationParams memory params, uint8 version, address creator)
+        internal
+        returns (address)
+    {
         // Common validations
         if (params.endOfTrading < block.timestamp + minimumTradingDuration) {
             revert InvalidEndOfTrading();
@@ -773,9 +906,6 @@ contract TruthMarketManager is
         }
         if (params.paymentTokenAddress == address(0)) {
             revert InvalidAddress();
-        }
-        if (rewardWallet == address(0)) {
-            revert InvalidRewardWallet();
         }
 
         // Set and validate symbols
@@ -835,7 +965,12 @@ contract TruthMarketManager is
 
         // Transfer rewards if any
         if (params.rewardAmount > 0) {
-            IERC20Upgradeable(params.rewardToken).safeTransferFrom(rewardWallet, marketAddress, params.rewardAmount);
+            if (hasRole(Roles.REWARD_SPENDER_ROLE, msg.sender)) {
+                if (rewardWallet == address(0)) revert InvalidRewardWallet();
+                IERC20Upgradeable(params.rewardToken).safeTransferFrom(rewardWallet, marketAddress, params.rewardAmount);
+            } else {
+                IERC20Upgradeable(params.rewardToken).safeTransferFrom(msg.sender, marketAddress, params.rewardAmount);
+            }
         }
 
         // Transfer token ownership
@@ -843,7 +978,7 @@ contract TruthMarketManager is
         noToken.transferOwnership(marketAddress);
 
         // Register market
-        creatorAddress[marketAddress] = msg.sender;
+        creatorAddress[marketAddress] = creator;
         _activeMarkets.add(marketAddress);
 
         emit MarketCreatedWithDescription(
@@ -853,7 +988,7 @@ contract TruthMarketManager is
             params.additionalInfo,
             params.endOfTrading,
             params.yesNoTokenCap,
-            msg.sender
+            creator
         );
 
         return marketAddress;
@@ -876,5 +1011,65 @@ contract TruthMarketManager is
             ) return false;
         }
         return true;
+    }
+
+    // Ownership / admin binding //////////////////////////////////////////
+    //
+    // The contract inherits both Ownable and AccessControl, which were wired up
+    // independently in `initialize`. To prevent governance handoff drift (owner
+    // moves but DEFAULT_ADMIN_ROLE stays behind, or DEFAULT_ADMIN_ROLE gets
+    // granted to a third party via AccessControl's native grantRole), the
+    // following overrides bind the two systems:
+    //
+    // - transferOwnership atomically migrates DEFAULT_ADMIN_ROLE along with
+    //   the Ownable slot, so future handoffs cannot leave a stale admin behind.
+    // - renounceOwnership is disabled, since a zero owner would brick UUPS
+    //   upgrades (_authorizeUpgrade is onlyOwner) and orphan the admin role.
+    // - grantRole / revokeRole / renounceRole reject direct changes to
+    //   DEFAULT_ADMIN_ROLE, forcing all admin rotation to go through
+    //   transferOwnership. Other roles (PAUSER_ROLE, MARKET_CREATOR_ROLE, etc.)
+    //   are unaffected and continue to use standard AccessControl flows.
+
+    /// @notice Transfer ownership and atomically migrate DEFAULT_ADMIN_ROLE.
+    /// @dev Overridden to keep `owner()` and `DEFAULT_ADMIN_ROLE` in sync.
+    function transferOwnership(address newOwner) public override onlyOwner {
+        if (newOwner == address(0)) revert InvalidAddress();
+
+        address oldOwner = owner();
+        _grantRole(Roles.DEFAULT_ADMIN_ROLE, newOwner);
+        // Skip the revoke in the self-transfer case; otherwise we'd wipe the
+        // admin role we just granted back to the same account.
+        if (oldOwner != newOwner) {
+            _revokeRole(Roles.DEFAULT_ADMIN_ROLE, oldOwner);
+        }
+        _transferOwnership(newOwner);
+    }
+
+    /// @notice Renouncing ownership would brick UUPS upgrades and orphan admin.
+    function renounceOwnership() public pure override {
+        revert OwnershipRenounceDisabled();
+    }
+
+    /// @notice Block direct grants of DEFAULT_ADMIN_ROLE; rotate via transferOwnership.
+    function grantRole(bytes32 role, address account) public override {
+        if (role == Roles.DEFAULT_ADMIN_ROLE) revert AdminRoleLockedToOwner();
+        super.grantRole(role, account);
+    }
+
+    /// @notice Block removing DEFAULT_ADMIN_ROLE from the current owner.
+    ///         Stale historical admins (non-owner) can still be revoked.
+    function revokeRole(bytes32 role, address account) public override {
+        if (role == Roles.DEFAULT_ADMIN_ROLE && account == owner()) {
+            revert AdminRoleLockedToOwner();
+        }
+        super.revokeRole(role, account);
+    }
+
+    /// @notice Block self-renunciation of DEFAULT_ADMIN_ROLE by the current owner.
+    function renounceRole(bytes32 role, address account) public override {
+        if (role == Roles.DEFAULT_ADMIN_ROLE && account == owner()) {
+            revert AdminRoleLockedToOwner();
+        }
+        super.renounceRole(role, account);
     }
 }
