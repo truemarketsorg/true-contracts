@@ -42,6 +42,7 @@ For contract addresses, versions, and configuration parameters, see [network_con
 
 ## Audits
 
+- **[Guardian Audits](https://github.com/GuardianAudits/Audits/tree/main/Trueo)**
 - **[iosiro](https://iosiro.com/audits/truth-markets-v2-smart-contract-audit)**
 
 ## Links
